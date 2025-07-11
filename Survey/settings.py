@@ -55,7 +55,7 @@ ROOT_URLCONF = 'Survey.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -100,6 +100,20 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'DEBUG',  # Set to DEBUG to see all logs
+    },
+}
+
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
@@ -124,6 +138,12 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Unity Cloud Save API Settings
-UNITY_PROJECT_ID = 'your-unity-project-id'
-UNITY_API_KEY = 'your-unity-api-key'
+#Google Vertex AI api keys
+GOOGLE_API_KEY = "AQ.Ab8RN6LRnq80d04f0Rh3yCTrA00x0HMqYPrn8YrPn-Z0VnrTQw"
+
+import os
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "C:\\Users\\ADMIN\\Desktop\\Survey\\credentials.json"
+
+
+# Existing settings...
+GEMINI_API_KEY = os.getenv('AIzaSyAjKvn752Q_XRPJZsNU-rOGzaf4HWkKrSk')

@@ -23,6 +23,8 @@ app_name = 'dashboard'
 
 
 urlpatterns = [
-    path('generic/', views.generic_dashboard, name='generic_dashboard'),
-    path('individual/', views.individual_dashboard, name='individual_dashboard'),
+    path('', views.index, name='index'),
+    path('analytics/', views.analytics, name='analytics'),
+    path('individual/', views.individual, name='individual'),
+    path('download/', views.download, name='download'),
 ]

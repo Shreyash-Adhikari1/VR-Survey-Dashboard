@@ -20,6 +20,6 @@ from django.views.generic.base import RedirectView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('dashboard/', include('dashboard.urls')),
-    path('', RedirectView.as_view(url='/dashboard/generic/', permanent=False), name='root'),
+    path('', include('dashboard.urls')),  # Redirect root to dashboard.urls
+    path('dashboard/', include('dashboard.urls')),  # Keep this for consistency
 ]
