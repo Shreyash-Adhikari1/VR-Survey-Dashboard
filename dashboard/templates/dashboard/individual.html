@@ -7,19 +7,50 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <style>
-        body { padding: 20px; }
-        .chart-container { margin: 20px 0; }
-        canvas { max-width: 600px; margin: 0 auto; }
+        body { display: flex; min-height: 100vh; }
+        .sidebar {
+            width: 250px;
+            background-color: #f8f9fa;
+            padding: 20px;
+            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+        }
+        .sidebar a {
+            display: block;
+            padding: 10px;
+            color: #000;
+            text-decoration: none;
+        }
+        .sidebar a:hover { background-color: #e9ecef; }
+        .content {
+            margin-left: 250px;
+            padding: 20px;
+            flex-grow: 1;
+        }
+        .chart-container { margin: 20px 0; max-width: 600px; margin-left: auto; margin-right: auto; }
+        canvas { max-width: 100%; margin: 0 auto; }
         .error-message { color: red; }
+        @media (max-width: 768px) {
+            .sidebar { width: 100%; height: auto; position: relative; }
+            .content { margin-left: 0; }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="sidebar">
+        <h4>Navigation</h4>
+        <a href="{% url 'dashboard:index' %}">Dashboard</a>
+        <a href="{% url 'dashboard:analytics' %}">Analytics</a>
+        <a href="{% url 'dashboard:individual' %}">Individual Results</a>
+    </div>
+    <div class="content">
         <h1 class="text-center mb-4">Individual Survey Response</h1>
 
         <form method="GET" class="mb-4">
             <div class="input-group">
-                <input type="text" name="key" class="form-control" placeholder="Enter Student ID" value="{{ request.GET.key }}">
+                <input type="text" name="key" class="form-control" placeholder="Enter Player ID" value="{{ request.GET.key }}">
                 <button type="submit" class="btn btn-primary">Search</button>
             </div>
         </form>
@@ -29,20 +60,17 @@
         {% endif %}
 
         {% if record %}
-        <h3>Student Details</h3>
+        <h3>Player Details</h3>
         <table class="table table-bordered mb-4">
-            <tr><th>ID</th><td>{{ record.id }}</td></tr>
-            <tr><th>Name</th><td>{{ record.name|default:"N/A" }}</td></tr>
-            <tr><th>Gender</th><td>{{ record.get_gender_display|default:"N/A" }}</td></tr>
-            <tr><th>Score</th><td>{{ record.score }}</td></tr>
-            <tr><th>Skipped</th><td>{{ record.skipped|yesno:"Yes,No" }}</td></tr>
-            <tr><th>Recommendation</th><td>{{ record.recommendation }}</td></tr>
-            <tr><th>Computing Score</th><td>{{ record.computing_score }}</td></tr>
-            <tr><th>Cybersecurity Score</th><td>{{ record.cybersecurity_score }}</td></tr>
-            <tr><th>AI Score</th><td>{{ record.ai_score }}</td></tr>
+            <tr><th>Player ID</th><td>{{ record.id }}</td></tr>
+            <tr><th>Total Score</th><td>{{ record.total_score|default:"N/A" }}</td></tr>
+            <tr><th>AI Points</th><td>{{ record.ai_points|default:"0" }}</td></tr>
+            <tr><th>Computing Points</th><td>{{ record.computing_points|default:"0" }}</td></tr>
+            <tr><th>Cybersecurity Points</th><td>{{ record.cybersecurity_points|default:"0" }}</td></tr>
+            <tr><th>Recommendation</th><td>{{ record.recommendation|default:"N/A" }}</td></tr>
         </table>
 
-        <h3>Quiz Responses (Q6–Q15, Q26–Q30)</h3>
+        <h3>Quiz Responses</h3>
         <table class="table table-striped">
             <thead class="table-dark">
                 <tr>
@@ -60,7 +88,7 @@
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="3" class="text-center">No quiz responses available.</td>
+                    <td colspan="3" class="text-center">No responses available.</td>
                 </tr>
                 {% endfor %}
             </tbody>

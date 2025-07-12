@@ -5,16 +5,14 @@ from django.shortcuts import get_object_or_404, render
 from django.http import HttpResponse
 import requests
 import csv
-from .models import SurveyResponse
+from .models import AnswerRecord, SurveyResponse
 import logging
-
-
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 def index(request):
-    # API endpoints (replace with your actual API endpoint)
+    # API endpoints (replace with your actual API endpoint if needed)
     urls = [
         "https://services.api.unity.com/cloud-save/v1/data/projects/77f104be-1501-4cb5-b939-e690de43ec34/environments/002f4514-3bea-412a-a9dc-37e1ba68de0f/players/ynntMpW2Ft7WndUE9hwjg8wySbQ4/items",
     ]
@@ -45,7 +43,7 @@ def index(request):
         [0],  # Q30: A - Cybersecurity
     ]
 
-    key_value_pairs = {}  # For passing to the template
+    key_value_pairs = {}
 
     def compare_answers(user_answer, correct_answer):
         if len(user_answer) == 1 and len(correct_answer) == 1:
@@ -88,9 +86,9 @@ def index(request):
                     elif choice == 1: computing_score += 2
 
         # Technical Aptitude (Q6–Q15, Q26–Q30)
-        computing_questions = [6, 9, 13, 14]  # Q6, Q9, Q13, Q14
-        cybersecurity_questions = [7, 11, 27, 30]  # Q7, Q11, Q27, Q30
-        ai_questions = [8, 10, 12, 15, 26, 28, 29]  # Q8, Q10, Q12, Q15, Q26, Q28, Q29
+        computing_questions = [6, 9, 13, 14]
+        cybersecurity_questions = [7, 11, 27, 30]
+        ai_questions = [8, 10, 12, 15, 26, 28, 29]
 
         for i, correct in enumerate(correctness, 6):
             if correct:
@@ -122,9 +120,9 @@ def index(request):
                     elif choice == 2: cybersecurity_score += 1
                     elif choice == 0: ai_score += 1
                 elif i == 20:  # Tech club role
-                    if choice == 1: ai_score += 1
+                    if choice == 2: computing_score += 1
                     elif choice == 0: cybersecurity_score += 1
-                    elif choice == 2: computing_score += 1
+                    elif choice == 1: ai_score += 1
 
         # Learning Style & Habits (Q21–Q25)
         for i, answer in enumerate(survey_answers[10:15], 21):
@@ -165,7 +163,7 @@ def index(request):
                 if answer:
                     choice = answer[0] if isinstance(answer, list) else answer
                     if i in [16, 17, 18, 19, 20, 21, 22, 23, 24, 25]:
-                        if choice in [0, 1, 2]:  # Adjust based on question
+                        if choice in [0, 1, 2]:
                             if i == 16 and choice == 2: tiebreaker_scores['Computing'] += 1
                             elif i == 16 and choice == 1: tiebreaker_scores['Cybersecurity'] += 1
                             elif i == 16 and choice == 0: tiebreaker_scores['AI'] += 1
@@ -196,12 +194,11 @@ def index(request):
                             elif i == 25 and choice == 2: tiebreaker_scores['Computing'] += 1
                             elif i == 25 and choice == 1: tiebreaker_scores['Cybersecurity'] += 1
                             elif i == 25 and choice == 0: tiebreaker_scores['AI'] += 1
-            max_tiebreaker = max(tiebreaker_scores.values())
             recommendation = max(tiebreaker_scores, key=tiebreaker_scores.get)
         else:
             recommendation = max(scores, key=scores.get)
 
-        return recommendation, scores
+        return recommendation, {'AI': ai_score, 'Computing': computing_score, 'Cybersecurity': cybersecurity_score}
 
     try:
         for url in urls:
@@ -218,71 +215,64 @@ def index(request):
                 logger.error("Expected 'results' to be a list, got: %s", type(results))
                 continue
 
-            for item in results:
-                if not isinstance(item, dict):
-                    logger.error("Expected item to be a dict, got: %s (%s)", item, type(item))
-                    continue
-                key = item.get('key')
-                if key is None:
-                    logger.error("Item missing 'key': %s", item)
-                    continue
+            # Extract answers and coursePoints
+            answers_data = next((item for item in results if item.get('key') == 'answers'), None)
+            course_points_data = next((item for item in results if item.get('key') == 'coursePoints'), None)
 
-                value = item.get('value', {})
-                if not isinstance(value, dict):
-                    logger.error("Expected 'value' to be a dict, got: %s (%s)", value, type(value))
-                    continue
+            if answers_data and isinstance(answers_data.get('value'), list):
+                player_id = answers_data.get('key')  # Using 'answers' as the player identifier
+                AnswerRecord.objects.filter(player_id=player_id).delete()
+                for record in answers_data['value']:
+                    AnswerRecord.objects.update_or_create(
+                        player_id=player_id,
+                        index=record.get('index'),
+                        defaults={
+                            'question_id': record.get('questionID'),
+                            'question_type': record.get('questionType'),
+                            'selected_option_id': record.get('selectedOptionID', ''),
+                            'course': record.get('course', ''),
+                            'points_earned': record.get('pointsEarned', 0),
+                        }
+                    )
 
-                answers = value.get('answers', [])
-                score = value.get('score', 0)
+                # Extract survey and quiz answers
+                answer_records = AnswerRecord.objects.filter(player_id=player_id).order_by('index')
+                survey_answers = [r.selected_option_id for r in answer_records if r.question_type == 'preference' and 0 <= r.index < 15]
+                quiz_answers = [r.selected_option_id for r in answer_records if r.question_type == 'knowledge']
 
-                survey_answers = answers[:15] if len(answers) >= 15 else answers
-                quiz_answers = answers[15:] if len(answers) > 15 else []
-
+                # Compare with correct answers for correctness
                 correctness = []
                 for user_answer, correct_answer in zip(quiz_answers, correct_answers):
+                    user_answer = [int(a) if a.isdigit() else a for a in user_answer.split(',')] if user_answer else []
                     if compare_answers(user_answer, correct_answer):
                         correctness.append(1)
                     else:
                         correctness.append(0)
 
-                correct_sum = sum(correctness)
-                skipped = correct_sum != score
-
-                survey_answers_str = json.dumps(survey_answers)
-                quiz_answers_str = json.dumps(quiz_answers)
-                correctness_str = ','.join(map(str, correctness))
+                # Calculate recommendation and scores
                 recommendation, scores = recommend_course(survey_answers, quiz_answers, correctness)
 
-                # Update or create the model instance
-                SurveyResponse.objects.update_or_create(
-                    id=key,
-                    defaults={
-                        'selected_options_from_one_to_five': survey_answers_str,
-                        'selected_options_rest_questions': quiz_answers_str,
-                        'score': score,
-                        'correctly_answered': correctness_str,
-                        'skipped': skipped,
-                        'recommendation': recommendation,
-                        'computing_score': scores['Computing'],
-                        'cybersecurity_score': scores['Cybersecurity'],
-                        'ai_score': scores['AI'],
-                    }
-                )
+                # Update SurveyResponse with coursePoints if available
+                if course_points_data and isinstance(course_points_data.get('value'), dict):
+                    course_points = course_points_data['value']
+                    survey_response, created = SurveyResponse.objects.update_or_create(
+                        player_id=player_id,
+                        defaults={
+                            'ai_points': course_points.get('AI', 0),
+                            'computing_points': course_points.get('Computing', 0),
+                            'cybersecurity_points': course_points.get('Cybersecurity', 0),
+                            'recommendation': recommendation,
+                        }
+                    )
 
-        # Fetch all survey responses
-        responses = SurveyResponse.objects.all()
-        for response in responses:
-            gender_display = response.get_gender_display() if response.gender else ''
-            key_value_pairs[response.id] = {
-                'name': response.name or '',
-                'gender': gender_display,
-                'score': response.score,
-                'skipped': 'Yes' if response.skipped else 'No',
-                'recommendation': response.recommendation,
-                'computing_score': response.computing_score,
-                'cybersecurity_score': response.cybersecurity_score,
-                'ai_score': response.ai_score,
-            }
+                key_value_pairs[player_id] = {
+                    'player_id': player_id,
+                    'total_score': survey_response.total_score if 'survey_response' in locals() else 0,
+                    'recommendation': recommendation,
+                    'ai_points': course_points.get('AI', 0),
+                    'computing_points': course_points.get('Computing', 0),
+                    'cybersecurity_points': course_points.get('Cybersecurity', 0),
+                }
 
     except requests.exceptions.RequestException as e:
         logger.error("API request failed: %s", e)
@@ -293,150 +283,34 @@ def index(request):
 
     return render(request, 'dashboard/index.html', {'key_value_pairs': key_value_pairs})
 
-
 def analytics(request):
-    # Initialize data structures
-    survey_data = {f'q{i}': Counter() for i in range(1, 26)}  # Q1–Q25
-    quiz_data = {f'q{i}': Counter() for i in range(26, 31)}  # Q26–Q30
-    correctness_data = {f'q{i}': {'correct': 0, 'total': 0} for i in range(6, 16)}  # Q6–Q15
-    correctness_data.update({f'q{i}': {'correct': 0, 'total': 0} for i in range(26, 31)})  # Q26–Q30
-    skipped_correctness = {
-        f'q{i}': {'skipped': {'correct': 0, 'total': 0}, 'not_skipped': {'correct': 0, 'total': 0}}
-        for i in range(6, 16)
-    }
-    skipped_correctness.update({
-        f'q{i}': {'skipped': {'correct': 0, 'total': 0}, 'not_skipped': {'correct': 0, 'total': 0}}
-        for i in range(26, 31)
-    })
-    skipped_distribution = {'skipped': 0, 'not_skipped': 0}
-    recommendation_distribution = {'Computing': 0, 'Cybersecurity': 0, 'AI': 0}
+    question_pick_rates = {f'q{i}': Counter() for i in range(1, 31)}
+    recommendation_distribution = {'AI': 0, 'Computing': 0, 'Cybersecurity': 0}
 
-    # Option mappings for survey questions
-    survey_options = {
-        'q1': {0: 'Software Developer', 1: 'Cybersecurity Analyst', 2: 'AI Engineer'},
-        'q2': {0: 'Finding bugs', 1: 'Designing algorithms', 2: 'Building applications'},
-        'q3': {0: 'Problem solver', 1: 'Security checker', 2: 'Innovator'},
-        'q4': {0: 'Machine thinking', 1: 'Preventing threats', 2: 'Creating tools'},
-        'q5': {0: 'Data privacy', 1: 'Neural networks', 2: 'Software engineering'},
-        'q16': {0: 'Alone', 1: 'In a team', 2: 'Creative environment'},
-        'q17': {0: 'Googling', 1: 'Root cause', 2: 'Reporting'},
-        'q18': {0: 'Curious', 1: 'Strategic', 2: 'Hands-on'},
-        'q19': {0: 'Books', 1: 'Tutorials', 2: 'Lectures'},
-        'q20': {0: 'Hacking systems', 1: 'ML projects', 2: 'Apps/websites'},
-        'q21': {0: 'Watching videos', 1: 'Trying yourself', 2: 'Reading articles'},
-        'q22': {0: 'Talking', 1: 'Writing', 2: 'Visualizing'},
-        'q23': {0: 'Solving puzzles', 1: 'Competing', 2: 'Creating features'},
-        'q24': {0: 'Take the lead', 1: 'Analyze ideas', 2: 'Do practicals'},
-        'q25': {0: 'Analytical', 1: 'Quick', 2: 'Diligent'},
-    }
+    answers = AnswerRecord.objects.all()
+    for answer in answers:
+        question_pick_rates[f'q{answer.question_id}'][answer.selected_option_id] += 1
+        if answer.question_type == 'knowledge' and answer.points_earned > 0:
+            recommendation_distribution[answer.course] += answer.points_earned
 
-    # Option mappings for quiz questions
-    quiz_options = {
-        'q6': {0: 'Hyper Trainer', 1: 'Hyper Text', 2: 'Home Tool'},
-        'q7': {0: 'password123', 1: 'HelloWorld', 2: 'X$9!q@T#nP'},
-        'q8': {0: 'True', 1: 'False', 2: 'Error'},
-        'q9': {0: 'If-else', 1: 'While', 2: 'Array'},
-        'q10': {0: '20', 1: '32', 2: '18'},
-        'q11': {0: 'Fishing', 1: 'Social engineering', 2: 'Device cloning'},
-        'q12': {0: 'Artificial Interface', 1: 'Automatic Intelligence', 2: 'Artificial Intelligence'},
-        'q13': {0: 'Python', 1: 'Java', 2: 'Excel'},
-        'q14': {0: 'Repeating actions', 1: 'Storing data', 2: 'Testing variables'},
-        'q15': {0: 'True', 1: 'False', 2: 'Error'},
-        'q26': {0: 'Creating viruses', 1: 'Teaching computers', 2: 'Installing OS'},
-        'q27': {0: 'Backup', 1: 'Data transfer', 2: 'Network protection'},
-        'q28': {0: '20', 1: '14', 2: '24'},
-        'q29': {0: 'Rules', 1: 'Data', 2: 'Design'},
-        'q30': {0: 'Cybersecurity', 1: 'Project Manager', 2: 'AI Ethics'},
-    }
+    question_chart_data = {}
+    for q, counter in question_pick_rates.items():
+        total = sum(counter.values()) or 1
+        labels = [str(k) for k in sorted(counter.keys())]
+        values = [v / total * 100 for v in [counter.get(k, 0) for k in sorted(counter.keys())]]
+        question_chart_data[q] = {'labels': labels, 'values': values}
 
-    responses = SurveyResponse.objects.all()
-    total_responses = responses.count()
-
-    for response in responses:
-        try:
-            # Parse survey answers (Q1–Q25)
-            survey_answers = json.loads(response.selected_options_from_one_to_five or '[]')
-            for i, answer in enumerate(survey_answers[:25], 1):
-                if answer:
-                    survey_data[f'q{i}'][answer[0]] += 1
-
-            # Parse quiz answers and correctness (Q6–Q15, Q26–Q30)
-            quiz_answers = json.loads(response.selected_options_rest_questions or '[]')
-            correctness = [int(x) for x in (response.correctly_answered or '').split(',') if x]
-            quiz_indices = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]
-            for i, (answer, correct) in zip(quiz_indices, zip(quiz_answers, correctness)):
-                if answer:
-                    quiz_data[f'q{i}'][answer[0]] += 1
-                correctness_data[f'q{i}']['total'] += 1
-                correctness_data[f'q{i}']['correct'] += correct
-                skip_key = 'skipped' if response.skipped else 'not_skipped'
-                skipped_correctness[f'q{i}'][skip_key]['total'] += 1
-                skipped_correctness[f'q{i}'][skip_key]['correct'] += correct
-
-            # Track skipped and recommendation distribution
-            skipped_distribution['skipped' if response.skipped else 'not_skipped'] += 1
-            recommendation_distribution[response.recommendation] += 1
-
-        except json.JSONDecodeError:
-            continue
-
-    # Prepare chart data
-    survey_chart_data = {}
-    for q, counter in survey_data.items():
-        labels = [survey_options[q].get(k, str(k)) for k in sorted(counter.keys())]
-        values = [counter.get(k, 0) / max(total_responses, 1) * 100 for k in sorted(counter.keys())]
-        survey_chart_data[q] = {
-            'labels': labels,
-            'values': values,
-            'type': 'bar',
-            'scales': json.dumps({'y': {'beginAtZero': True, 'title': {'display': True, 'text': 'Percentage (%)'}}}),
-            'legend_display': False
-        }
-
-    quiz_chart_data = {}
-    for q, counter in quiz_data.items():
-        labels = [quiz_options[q].get(k, str(k)) for k in sorted(counter.keys())]
-        values = [counter.get(k, 0) / max(total_responses, 1) * 100 for k in sorted(counter.keys())]
-        quiz_chart_data[q] = {'labels': labels, 'values': values}
-
-    correctness_chart_data = {
-        'labels': [f'Q{i}' for i in [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]],
-        'values': [
-            (data['correct'] / max(data['total'], 1) * 100) if data['total'] > 0 else 0
-            for data in correctness_data.values()
-        ]
-    }
-
-    skipped_correctness_chart_data = {
-        'labels': [f'Q{i}' for i in [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]],
-        'skipped': [
-            (data['skipped']['correct'] / max(data['skipped']['total'], 1) * 100) if data['skipped']['total'] > 0 else 0
-            for data in skipped_correctness.values()
-        ],
-        'not_skipped': [
-            (data['not_skipped']['correct'] / max(data['not_skipped']['total'], 1) * 100) if data['not_skipped']['total'] > 0 else 0
-            for data in skipped_correctness.values()
-        ]
-    }
-
+    total_points = sum(recommendation_distribution.values()) or 1
     recommendation_pie_data = {
-        'labels': ['Computing', 'Cybersecurity', 'AI'],
-        'values': [
-            recommendation_distribution['Computing'] / max(total_responses, 1) * 100,
-            recommendation_distribution['Cybersecurity'] / max(total_responses, 1) * 100,
-            recommendation_distribution['AI'] / max(total_responses, 1) * 100
-        ]
+        'labels': ['AI', 'Computing', 'Cybersecurity'],
+        'values': [recommendation_distribution[c] / total_points * 100 for c in ['AI', 'Computing', 'Cybersecurity']]
     }
 
     context = {
-        'survey_chart_data': survey_chart_data,
-        'quiz_chart_data': quiz_chart_data,
-        'correctness_chart_data': correctness_chart_data,
-        'skipped_correctness_chart_data': skipped_correctness_chart_data,
+        'question_chart_data': question_chart_data,
         'recommendation_pie_data': recommendation_pie_data,
-        'total_responses': total_responses
+        'total_responses': SurveyResponse.objects.count()
     }
-
     return render(request, 'dashboard/analytics.html', context)
 
 def individual(request):
@@ -445,161 +319,55 @@ def individual(request):
     chart_data = {}
     quiz_responses = []
 
-    # Search functionality
-    key = request.GET.get('key')
-    if key:
+    player_id = request.GET.get('key')
+    if player_id:
         try:
-            record = SurveyResponse.objects.get(id=key)
-        except SurveyResponse.DoesNotExist:
-            error = "No student found with this ID."
+            answer_records = AnswerRecord.objects.filter(player_id=player_id)
+            if answer_records.exists():
+                record = {'player_id': player_id}
+                correctness = [a.points_earned > 0 for a in answer_records if a.question_type == 'knowledge']
+                chart_data = {
+                    'labels': [f'Q{i}' for i in sorted(set(a.question_id for a in answer_records))],
+                    'values': [100 if c else 0 for c in correctness]
+                }
+                for a in answer_records:
+                    quiz_responses.append({
+                        'question': f'Question {a.question_id}',
+                        'response': a.selected_option_id,
+                        'correct': 'Correct' if a.points_earned > 0 else 'Incorrect'
+                    })
+        except Exception as e:
+            error = f"No data found for player {player_id}: {str(e)}"
 
-    if record:
-        # Quiz options mapping
-        quiz_options = {
-            'q6': {0: 'Hyper Trainer', 1: 'Hyper Text', 2: 'Home Tool'},
-            'q7': {0: 'password123', 1: 'HelloWorld', 2: 'X$9!q@T#nP'},
-            'q8': {0: 'True', 1: 'False', 2: 'Error'},
-            'q9': {0: 'If-else', 1: 'While', 2: 'Array'},
-            'q10': {0: '20', 1: '32', 2: '18'},
-            'q11': {0: 'Fishing', 1: 'Social engineering', 2: 'Device cloning'},
-            'q12': {0: 'Artificial Interface', 1: 'Automatic Intelligence', 2: 'Artificial Intelligence'},
-            'q13': {0: 'Python', 1: 'Java', 2: 'Excel'},
-            'q14': {0: 'Repeating actions', 1: 'Storing data', 2: 'Testing variables'},
-            'q15': {0: 'True', 1: 'False', 2: 'Error'},
-            'q26': {0: 'Creating viruses', 1: 'Teaching computers', 2: 'Installing OS'},
-            'q27': {0: 'Backup', 1: 'Data transfer', 2: 'Network protection'},
-            'q28': {0: '20', 1: '14', 2: '24'},
-            'q29': {0: 'Rules', 1: 'Data', 2: 'Design'},
-            'q30': {0: 'Cybersecurity', 1: 'Project Manager', 2: 'AI Ethics'},
-        }
-
-        # Parse quiz answers and correctness
-        quiz_answers = json.loads(record.selected_options_rest_questions or '[]')
-        correctness = [int(x) for x in (record.correctly_answered or '').split(',') if x]
-
-        # Line chart data for correctness
-        chart_data = {
-            'labels': [f'Q{i}' for i in [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]],
-            'values': [100 if correct else 0 for correct in correctness]
-        }
-
-        # Quiz responses for table
-        quiz_indices = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]
-        for i, (answer, correct) in zip(quiz_indices, zip(quiz_answers, correctness)):
-            q = f'q{i}'
-            if answer:
-                response_text = quiz_options[q].get(answer[0], str(answer[0]))
-                quiz_responses.append({
-                    'question': f'Question {i}',
-                    'response': response_text,
-                    'correct': 'Correct' if correct else 'Incorrect'
-                })
-
-    context = {
-        'record': record,
-        'error': error,
-        'chart_data': chart_data,
-        'quiz_responses': quiz_responses
-    }
+    context = {'record': record, 'error': error, 'chart_data': chart_data, 'quiz_responses': quiz_responses}
     return render(request, 'dashboard/individual.html', context)
 
 def download(request):
-    # Define response with CSV content type
     response = HttpResponse(content_type='text/csv')
     response['Content-Disposition'] = 'attachment; filename="survey_responses.csv"'
-
-    # Option mappings
-    survey_options = {
-        'q1': {0: 'Software Developer', 1: 'Cybersecurity Analyst', 2: 'AI Engineer'},
-        'q2': {0: 'Finding bugs', 1: 'Designing algorithms', 2: 'Building applications'},
-        'q3': {0: 'Problem solver', 1: 'Security checker', 2: 'Innovator'},
-        'q4': {0: 'Machine thinking', 1: 'Preventing threats', 2: 'Creating tools'},
-        'q5': {0: 'Data privacy', 1: 'Neural networks', 2: 'Software engineering'},
-        'q16': {0: 'Alone', 1: 'In a team', 2: 'Creative environment'},
-        'q17': {0: 'Googling', 1: 'Root cause', 2: 'Reporting'},
-        'q18': {0: 'Curious', 1: 'Strategic', 2: 'Hands-on'},
-        'q19': {0: 'Books', 1: 'Tutorials', 2: 'Lectures'},
-        'q20': {0: 'Hacking systems', 1: 'ML projects', 2: 'Apps/websites'},
-        'q21': {0: 'Watching videos', 1: 'Trying yourself', 2: 'Reading articles'},
-        'q22': {0: 'Talking', 1: 'Writing', 2: 'Visualizing'},
-        'q23': {0: 'Solving puzzles', 1: 'Competing', 2: 'Creating features'},
-        'q24': {0: 'Take the lead', 1: 'Analyze ideas', 2: 'Do practicals'},
-        'q25': {0: 'Analytical', 1: 'Quick', 2: 'Diligent'},
-    }
-
-    quiz_options = {
-        'q6': {0: 'Hyper Trainer', 1: 'Hyper Text', 2: 'Home Tool'},
-        'q7': {0: 'password123', 1: 'HelloWorld', 2: 'X$9!q@T#nP'},
-        'q8': {0: 'True', 1: 'False', 2: 'Error'},
-        'q9': {0: 'If-else', 1: 'While', 2: 'Array'},
-        'q10': {0: '20', 1: '32', 2: '18'},
-        'q11': {0: 'Fishing', 1: 'Social engineering', 2: 'Device cloning'},
-        'q12': {0: 'Artificial Interface', 1: 'Automatic Intelligence', 2: 'Artificial Intelligence'},
-        'q13': {0: 'Python', 1: 'Java', 2: 'Excel'},
-        'q14': {0: 'Repeating actions', 1: 'Storing data', 2: 'Testing variables'},
-        'q15': {0: 'True', 1: 'False', 2: 'Error'},
-        'q26': {0: 'Creating viruses', 1: 'Teaching computers', 2: 'Installing OS'},
-        'q27': {0: 'Backup', 1: 'Data transfer', 2: 'Network protection'},
-        'q28': {0: '20', 1: '14', 2: '24'},
-        'q29': {0: 'Rules', 1: 'Data', 2: 'Design'},
-        'q30': {0: 'Cybersecurity', 1: 'Project Manager', 2: 'AI Ethics'},
-    }
-
-    # Create CSV writer
     writer = csv.writer(response)
-    
-    # Write header
-    headers = ['id', 'name', 'gender', 'score', 'skipped', 'recommendation', 'computing_score', 'cybersecurity_score', 'ai_score']
-    headers.extend([f'Q{i}' for i in range(1, 31)])
+    headers = ['player_id', 'total_score', 'ai_points', 'computing_points', 'cybersecurity_points', 'recommendation']
+    headers.extend([f'Q{i}_option' for i in range(1, 31)])
     headers.extend([f'Q{i}_correct' for i in [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]])
     writer.writerow(headers)
 
-    # Fetch all responses
     responses = SurveyResponse.objects.all()
-
-    for record in responses:
+    for response in responses:
         row = [
-            record.id,
-            record.name or '',
-            record.get_gender_display() if record.gender else '',
-            record.score,
-            'Yes' if record.skipped else 'No',
-            record.recommendation,
-            record.computing_score,
-            record.cybersecurity_score,
-            record.ai_score
+            response.player_id,
+            response.total_score,
+            response.ai_points,
+            response.computing_points,
+            response.cybersecurity_points,
+            response.recommendation
         ]
-
-        # Parse survey answers (Q1–Q25)
-        survey_answers = json.loads(record.selected_options_from_one_to_five or '[]')
-        for i in range(1, 26):
-            q = f'q{i}'
-            if i-1 < len(survey_answers) and survey_answers[i-1]:
-                answer = survey_options[q].get(survey_answers[i-1][0], str(survey_answers[i-1][0]))
-            else:
-                answer = ''
-            row.append(answer)
-
-        # Parse quiz answers (Q6–Q15, Q26–Q30)
-        quiz_answers = json.loads(record.selected_options_rest_questions or '[]')
-        quiz_indices = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]
-        quiz_answer_dict = {i: quiz_answers[i-6] if i-6 < len(quiz_answers) else [] for i in quiz_indices}
-        for i in range(6, 31):
-            q = f'q{i}'
-            answer = ''
-            if i in quiz_answer_dict and quiz_answer_dict[i]:
-                answer = quiz_options[q].get(quiz_answer_dict[i][0], str(quiz_answer_dict[i][0]))
-            row.append(answer)
-
-        # Parse correctness
-        correctness = [int(x) for x in (record.correctly_answered or '').split(',') if x]
+        answers = AnswerRecord.objects.filter(player_id=response.player_id).order_by('question_id')
+        for i in range(1, 31):
+            answer = answers.filter(question_id=i).first()
+            row.append(answer.selected_option_id if answer else '')
         for i in [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 26, 27, 28, 29, 30]:
-            if i-6 < len(correctness):
-                correct = 'Correct' if correctness[i-6] else 'Incorrect'
-            else:
-                correct = ''
-            row.append(correct)
-
+            answer = answers.filter(question_id=i).first()
+            row.append('Correct' if (answer and answer.points_earned > 0) else '')
         writer.writerow(row)
 
     return response
